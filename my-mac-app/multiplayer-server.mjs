@@ -18,6 +18,59 @@ const mimeTypes = {
   '.wasm': 'application/wasm',
 };
 
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isInputPayload(value) {
+  return isRecord(value) &&
+    isRecord(value.move) &&
+    isFiniteNumber(value.move.x) &&
+    isFiniteNumber(value.move.z) &&
+    typeof value.boost === 'boolean' &&
+    (value.fire === undefined || (
+      isRecord(value.fire) &&
+      isFiniteNumber(value.fire.x) &&
+      isFiniteNumber(value.fire.y) &&
+      isFiniteNumber(value.fire.z)
+    ));
+}
+
+function isTankSnapshot(value) {
+  return isRecord(value) &&
+    ['light', 'medium', 'heavy'].includes(value.typeId) &&
+    ['x', 'y', 'z', 'rotationX', 'rotationY', 'rotationZ', 'turretRotationY', 'hp']
+      .every(key => isFiniteNumber(value[key]));
+}
+
+function isStatePayload(value) {
+  return isRecord(value) &&
+    Array.isArray(value.tanks) &&
+    value.tanks.length === 2 &&
+    value.tanks.every(isTankSnapshot) &&
+    Array.isArray(value.bullets) &&
+    value.bullets.length <= 512 &&
+    value.bullets.every(bullet =>
+      isRecord(bullet) &&
+      isFiniteNumber(bullet.id) &&
+      isFiniteNumber(bullet.x) &&
+      isFiniteNumber(bullet.y) &&
+      isFiniteNumber(bullet.z) &&
+      typeof bullet.isEnemy === 'boolean'
+    ) &&
+    Array.isArray(value.obstacles) &&
+    value.obstacles.length <= 512 &&
+    value.obstacles.every(obstacle =>
+      isRecord(obstacle) &&
+      isFiniteNumber(obstacle.health) &&
+      typeof obstacle.destroyed === 'boolean'
+    );
+}
+
 function send(socket, message) {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
@@ -83,9 +136,20 @@ webSocketServer.on('connection', socket => {
       send(socket, { type: 'error', message: '无效的网络消息' });
       return;
     }
+    if (!isRecord(message) || typeof message.type !== 'string') {
+      send(socket, { type: 'error', message: '无效的网络消息' });
+      return;
+    }
 
     if (message.type === 'host') {
-      const roomCode = randomBytes(3).toString('hex').toUpperCase();
+      if (peers.has(socket)) {
+        send(socket, { type: 'error', message: '当前连接已在房间中，请重新连接。' });
+        return;
+      }
+      let roomCode;
+      do {
+        roomCode = randomBytes(3).toString('hex').toUpperCase();
+      } while (rooms.has(roomCode));
       rooms.set(roomCode, { host: socket, guest: null });
       peers.set(socket, { role: 'host', roomCode });
       send(socket, { type: 'room-created', roomCode });
@@ -93,6 +157,10 @@ webSocketServer.on('connection', socket => {
     }
 
     if (message.type === 'join') {
+      if (peers.has(socket)) {
+        send(socket, { type: 'error', message: '当前连接已在房间中，请重新连接。' });
+        return;
+      }
       const roomCode = String(message.roomCode ?? '').trim().toUpperCase();
       const room = rooms.get(roomCode);
       if (!room) {
@@ -116,10 +184,20 @@ webSocketServer.on('connection', socket => {
       send(socket, { type: 'error', message: '请先创建或加入房间。' });
       return;
     }
-    if (peer.role === 'host' && message.type === 'state' && room.guest) {
-      send(room.guest, message);
+    if (peer.role === 'host' && message.type === 'state') {
+      if (!isStatePayload(message.payload)) {
+        send(socket, { type: 'error', message: '无效的对局状态数据。' });
+        return;
+      }
+      if (room.guest) send(room.guest, message);
     } else if (peer.role === 'guest' && message.type === 'input') {
+      if (!isInputPayload(message.payload)) {
+        send(socket, { type: 'error', message: '无效的控制输入数据。' });
+        return;
+      }
       send(room.host, message);
+    } else {
+      send(socket, { type: 'error', message: '不支持的网络消息。' });
     }
   });
 
