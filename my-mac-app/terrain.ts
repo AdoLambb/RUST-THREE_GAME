@@ -18,6 +18,14 @@ export type TerrainObstacle = {
 export const terrainObstacles: TerrainObstacle[] = [];
 const TANK_COLLISION_RADIUS = 1.35;
 let terrainRandomState = 0x51f15e;
+const TANK_SPAWN_ZONES = [
+  { x: 0, z: 42 },
+  { x: 0, z: -42 },
+];
+
+function isNearTankSpawn(x: number, z: number) {
+  return TANK_SPAWN_ZONES.some(spawn => Math.hypot(x - spawn.x, z - spawn.z) < 8);
+}
 
 function terrainRandom() {
   terrainRandomState = (terrainRandomState * 1664525 + 1013904223) >>> 0;
@@ -59,24 +67,46 @@ export function buildTerrain(scene: THREE.Scene) {
   for(let i=0; i<40; i++) {
     const x = (terrainRandom() - 0.5) * (MAP_SIZE - 16);
     const z = (terrainRandom() - 0.5) * (MAP_SIZE - 16);
-    if (Math.sqrt(x*x + z*z) > 15 && Math.hypot(x, z + 32) > 5) createTree(x, z, scene, ground);
+    if (
+      Math.sqrt(x*x + z*z) > 15 &&
+      Math.hypot(x, z + 32) > 5 &&
+      !isNearTankSpawn(x, z)
+    ) createTree(x, z, scene, ground);
   }
   for(let i=0; i<10; i++) {
     const x = (terrainRandom() - 0.5) * (MAP_SIZE - 20);
     const z = (terrainRandom() - 0.5) * (MAP_SIZE - 20);
-    if (Math.sqrt(x*x + z*z) > 20 && Math.hypot(x, z + 32) > 7) createHouse(x, z, scene, ground);
+    if (
+      Math.sqrt(x*x + z*z) > 20 &&
+      Math.hypot(x, z + 32) > 7 &&
+      !isNearTankSpawn(x, z)
+    ) createHouse(x, z, scene, ground);
   }
 
   return ground; 
 }
 
-const groundRaycaster = new THREE.Raycaster();
-const downVector = new THREE.Vector3(0, -1, 0);
-
 export function getGroundHeight(x: number, z: number, ground: THREE.Mesh): number {
-  groundRaycaster.set(new THREE.Vector3(x, 20, z), downVector);
-  const intersects = groundRaycaster.intersectObject(ground);
-  return intersects.length > 0 ? intersects[0].point.y : 0;
+  const localX = (x - ground.position.x) / ground.scale.x;
+  const localZ = (z - ground.position.z) / ground.scale.z;
+  const height = Math.sin(localX * 0.08) * Math.cos(localZ * 0.08) * 0.35
+    + Math.sin(localX * 0.22) * Math.cos(localZ * 0.22) * 0.1;
+  return ground.position.y + height * ground.scale.y;
+}
+
+export function getGroundNormal(
+  x: number,
+  z: number,
+  ground: THREE.Mesh,
+  target = new THREE.Vector3(),
+) {
+  const localX = (x - ground.position.x) / ground.scale.x;
+  const localZ = (z - ground.position.z) / ground.scale.z;
+  const dx = 0.028 * Math.cos(localX * 0.08) * Math.cos(localZ * 0.08)
+    + 0.022 * Math.cos(localX * 0.22) * Math.cos(localZ * 0.22);
+  const dz = -0.028 * Math.sin(localX * 0.08) * Math.sin(localZ * 0.08)
+    - 0.022 * Math.sin(localX * 0.22) * Math.sin(localZ * 0.22);
+  return target.set(-dx / ground.scale.x, 1 / ground.scale.y, -dz / ground.scale.z).normalize();
 }
 
 export function moveTank(
@@ -84,6 +114,7 @@ export function moveTank(
   direction: THREE.Vector3,
   distance: number,
   collisionRadius = TANK_COLLISION_RADIUS,
+  allowSlide = true,
 ) {
   const stepCount = Math.max(1, Math.ceil(Math.abs(distance) / 0.25));
   const stepDistance = distance / stepCount;
@@ -100,8 +131,13 @@ export function moveTank(
       TANK_BOUNDARY,
     );
 
-    if (!isTankPositionBlocked(nextX, position.z, collisionRadius)) position.x = nextX;
-    if (!isTankPositionBlocked(position.x, nextZ, collisionRadius)) position.z = nextZ;
+    if (!isTankPositionBlocked(nextX, nextZ, collisionRadius)) {
+      position.x = nextX;
+      position.z = nextZ;
+    } else if (allowSlide) {
+      if (!isTankPositionBlocked(nextX, position.z, collisionRadius)) position.x = nextX;
+      if (!isTankPositionBlocked(position.x, nextZ, collisionRadius)) position.z = nextZ;
+    }
   }
 }
 
@@ -110,17 +146,22 @@ export function findObstacleHit(
   to: THREE.Vector3,
   ignoredObstacle?: TerrainObstacle,
 ) {
-  const distance = from.distanceTo(to);
+  const deltaX = to.x - from.x;
+  const deltaY = to.y - from.y;
+  const deltaZ = to.z - from.z;
+  const distance = Math.hypot(deltaX, deltaY, deltaZ);
   const steps = Math.max(1, Math.ceil(distance / 0.2));
   for (let step = 1; step <= steps; step++) {
     const progress = step / steps;
-    const point = from.clone().lerp(to, progress);
-    const obstacle = terrainObstacles.find(candidate =>
-      !candidate.destroyed &&
-      candidate !== ignoredObstacle &&
-      isProjectileInsideObstacle(point, candidate),
-    );
-    if (obstacle) return { obstacle, point };
+    const x = from.x + deltaX * progress;
+    const y = from.y + deltaY * progress;
+    const z = from.z + deltaZ * progress;
+    for (const obstacle of terrainObstacles) {
+      if (obstacle.destroyed || obstacle === ignoredObstacle) continue;
+      if (isProjectileInsideObstacleAt(x, y, z, obstacle)) {
+        return { obstacle, point: new THREE.Vector3(x, y, z) };
+      }
+    }
   }
   return null;
 }
@@ -141,15 +182,20 @@ export function damageObstacle(obstacle: TerrainObstacle, amount: number) {
   });
 }
 
-function isProjectileInsideObstacle(point: THREE.Vector3, obstacle: TerrainObstacle) {
-  const relativeHeight = point.y - obstacle.groundY;
+function isProjectileInsideObstacleAt(
+  x: number,
+  y: number,
+  z: number,
+  obstacle: TerrainObstacle,
+) {
+  const relativeHeight = y - obstacle.groundY;
   if (obstacle.type === 'tree') {
     if (relativeHeight < 0 || relativeHeight > 5) return false;
-    return Math.hypot(point.x - obstacle.x, point.z - obstacle.z) <= 1.45;
+    return Math.hypot(x - obstacle.x, z - obstacle.z) <= 1.45;
   }
 
-  const relativeX = point.x - obstacle.x;
-  const relativeZ = point.z - obstacle.z;
+  const relativeX = x - obstacle.x;
+  const relativeZ = z - obstacle.z;
   if (relativeHeight >= 3.8 && relativeHeight <= 6.9) {
     return Math.hypot(relativeX, relativeZ) <= 3.25;
   }
