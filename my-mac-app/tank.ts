@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getGroundHeight, moveTank, TANK_BOUNDARY } from './terrain';
+import { getGroundHeight, TANK_BOUNDARY } from './terrain';
 
 export type TankTypeId = 'light' | 'medium' | 'heavy';
 
@@ -61,9 +61,12 @@ export interface TankData {
   group: THREE.Group;
   turretGroup: THREE.Group;
   barrel: THREE.Mesh;
+  rotors: THREE.Group[];
   isSelected: boolean;
   targetPos: THREE.Vector3;
   fireCooldown: number;
+  machineGunCooldown: number;
+  flightPhase: number;
   isEnemy: boolean;
   hp: number;
 }
@@ -74,23 +77,149 @@ let tankIdCounter = 0;
 
 function buildTankMesh(bodyColor: number, emissiveColor: number, modelScale: number) {
   const group = new THREE.Group();
-  const track = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.6, 2.8), new THREE.MeshStandardMaterial({ color: 0x222222 }));
-  track.position.y = 0.5; track.castShadow = true; group.add(track);
+  const armor = new THREE.MeshStandardMaterial({
+    color: 0x10111a,
+    emissive: emissiveColor,
+    metalness: 0.72,
+    roughness: 0.28,
+  });
+  const laserBlue = new THREE.MeshBasicMaterial({ color: bodyColor, toneMapped: false });
+  const laserPurple = new THREE.MeshBasicMaterial({ color: 0x9b53ff, toneMapped: false });
+  const canopyMaterial = new THREE.MeshStandardMaterial({
+    color: 0x102532,
+    emissive: bodyColor,
+    emissiveIntensity: 0.65,
+    metalness: 0.45,
+    roughness: 0.2,
+  });
+  const addMesh = (
+    parent: THREE.Object3D,
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    position: THREE.Vector3,
+  ) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(position);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  };
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 2.2), new THREE.MeshStandardMaterial({ color: bodyColor, emissive: emissiveColor }));
-  body.position.y = 1.0; body.castShadow = true; group.add(body);
+  const hull = addMesh(
+    group,
+    new THREE.CapsuleGeometry(0.58, 2.1, 4, 8),
+    armor,
+    new THREE.Vector3(0, 0, 0),
+  );
+  hull.rotation.x = Math.PI / 2;
+  const crossArm = addMesh(
+    group,
+    new THREE.BoxGeometry(4.1, 0.2, 0.62),
+    armor,
+    new THREE.Vector3(0, -0.06, 0),
+  );
+  crossArm.rotation.y = -0.08;
+  addMesh(
+    group,
+    new THREE.BoxGeometry(3.8, 0.05, 0.08),
+    laserBlue,
+    new THREE.Vector3(0, -0.13, 0.35),
+  );
+  addMesh(
+    group,
+    new THREE.BoxGeometry(3.5, 0.05, 0.06),
+    laserPurple,
+    new THREE.Vector3(0, -0.16, -0.3),
+  );
+  addMesh(
+    group,
+    new THREE.SphereGeometry(0.45, 12, 10),
+    canopyMaterial,
+    new THREE.Vector3(0, 0.45, -0.1),
+  ).scale.set(0.82, 0.64, 1.2);
+
+  for (const side of [-1, 1]) {
+    const arm = addMesh(
+      group,
+      new THREE.BoxGeometry(0.11, 0.14, 2.3),
+      armor,
+      new THREE.Vector3(side * 1.45, -0.02, 0.02),
+    );
+    arm.rotation.y = side * -0.12;
+    addMesh(
+      group,
+      new THREE.BoxGeometry(0.07, 0.055, 1.85),
+      side === -1 ? laserBlue : laserPurple,
+      new THREE.Vector3(side * 1.45, -0.12, 0.05),
+    ).rotation.y = side * -0.12;
+  }
 
   const turretGroup = new THREE.Group();
-  turretGroup.position.y = 1.4; 
-  const turretBase = new THREE.Mesh(new THREE.BoxGeometry(1, 0.5, 1), new THREE.MeshStandardMaterial({ color: 0xeeeeee }));
-  turretBase.castShadow = true; turretGroup.add(turretBase);
-
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.8), new THREE.MeshStandardMaterial({ color: 0x555555 }));
-  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0, -1.2); barrel.castShadow = true; turretGroup.add(barrel);
-
+  turretGroup.position.set(0, 0.62, 0);
   group.add(turretGroup);
+  addMesh(
+    turretGroup,
+    new THREE.CylinderGeometry(0.36, 0.44, 0.18, 8),
+    armor,
+    new THREE.Vector3(0, 0, 0),
+  );
+  const barrel = addMesh(
+    turretGroup,
+    new THREE.CylinderGeometry(0.1, 0.14, 1.35, 8),
+    laserBlue,
+    new THREE.Vector3(0, 0.13, -0.82),
+  );
+  barrel.rotation.x = -Math.PI / 2;
+  addMesh(
+    turretGroup,
+    new THREE.CylinderGeometry(0.19, 0.24, 0.25, 8),
+    armor,
+    new THREE.Vector3(0, 0.13, -0.2),
+  ).rotation.x = -Math.PI / 2;
+
+  const gun = addMesh(
+    turretGroup,
+    new THREE.CylinderGeometry(0.035, 0.045, 0.9, 6),
+    armor,
+    new THREE.Vector3(0.32, 0.17, -0.65),
+  );
+  gun.rotation.x = -Math.PI / 2;
+
+  const rotors: THREE.Group[] = [];
+  for (const x of [-1, 1]) {
+    for (const z of [-0.9, 0.9]) {
+      const rotor = new THREE.Group();
+      rotor.position.set(x * 1.35, -0.42, z);
+      group.add(rotor);
+      addMesh(
+        group,
+        new THREE.CylinderGeometry(0.07, 0.1, 0.38, 8),
+        armor,
+        new THREE.Vector3(x * 1.35, -0.38, z),
+      );
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.48, 0.018, 5, 20),
+        laserPurple,
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = -0.11;
+      rotor.add(ring);
+      for (let bladeIndex = 0; bladeIndex < 4; bladeIndex++) {
+        const blade = new THREE.Mesh(
+          new THREE.BoxGeometry(0.1, 0.035, 0.8),
+          bladeIndex % 2 === 0 ? armor : laserBlue,
+        );
+        blade.position.y = -0.23;
+        blade.rotation.y = bladeIndex * Math.PI / 2;
+        blade.castShadow = true;
+        rotor.add(blade);
+      }
+      rotors.push(rotor);
+    }
+  }
   group.scale.setScalar(modelScale);
-  return { group, turretGroup, barrel };
+  return { group, turretGroup, barrel, rotors };
 }
 
 export function createTank(
@@ -102,11 +231,11 @@ export function createTank(
   typeId: TankTypeId = 'medium',
 ) {
   const type = TANK_DEFINITIONS[typeId];
-  const color = isEnemy ? 0xff3333 : 0x3366ff;
-  const emissive = isEnemy ? 0x550000 : 0x112244;
-  const { group, turretGroup, barrel } = buildTankMesh(color, emissive, type.modelScale);
+  const color = isEnemy ? 0xff52dc : 0x46dfff;
+  const emissive = isEnemy ? 0x350a2c : 0x07333d;
+  const { group, turretGroup, barrel, rotors } = buildTankMesh(color, emissive, type.modelScale);
   
-  group.position.set(x, getGroundHeight(x, z, ground), z);
+  group.position.set(x, getGroundHeight(x, z, ground) + 7, z);
   if (isEnemy) turretGroup.rotation.y = Math.random() * Math.PI;
   scene.add(group);
   
@@ -116,9 +245,12 @@ export function createTank(
     group,
     turretGroup,
     barrel,
+    rotors,
     isSelected: false,
     targetPos: group.position.clone(),
     fireCooldown: isEnemy ? 1.2 : 0,
+    machineGunCooldown: Math.random() * 0.18,
+    flightPhase: Math.random() * Math.PI * 2,
     isEnemy,
     hp: type.maxHp,
   };
@@ -127,10 +259,12 @@ export function createTank(
 
 export interface Bullet {
   id: number;
-  mesh: THREE.Mesh;
+  mesh: THREE.Group;
   ownerTankId: number;
   startPos: THREE.Vector3;
   targetPos: THREE.Vector3;
+  damage: number;
+  isLaser: boolean;
   elapsed: number;
   duration: number;
   isEnemy: boolean;
@@ -145,13 +279,63 @@ export function fireBullet(
   targetPos: THREE.Vector3,
   isEnemy: boolean,
   scene: THREE.Scene,
+  isLaser = true,
+  damage = 1,
 ) {
-  const color = isEnemy ? 0xff0000 : 0xffaa00;
-  const bulletMesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), new THREE.MeshBasicMaterial({ color }));
-  const startPos = new THREE.Vector3(0, 0, -2.2);
+  const color = isEnemy ? 0xff52dc : 0x46dfff;
+  const bulletMesh = new THREE.Group();
+  const startPos = new THREE.Vector3(0.08, 0.15, isLaser ? -1.58 : -1.16);
   tank.turretGroup.updateWorldMatrix(true, false);
   tank.turretGroup.localToWorld(startPos);
   bulletMesh.position.copy(startPos);
+  const direction = targetPos.clone().sub(startPos).normalize();
+  bulletMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction);
+  if (isLaser) {
+    const trail = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.17, 4.2, 8, 1, true),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    );
+    trail.rotation.x = -Math.PI / 2;
+    trail.position.z = 2.1;
+    bulletMesh.add(trail);
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.075, 3.9, 6, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xc5fcff,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    );
+    beam.rotation.x = -Math.PI / 2;
+    beam.position.z = 1.95;
+    bulletMesh.add(beam);
+    const bolt = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.2, 1),
+      new THREE.MeshBasicMaterial({ color: 0xf4ffff, toneMapped: false }),
+    );
+    bolt.scale.set(0.85, 0.85, 1.9);
+    bulletMesh.add(bolt);
+  } else {
+    const tracer = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07, 6, 5),
+      new THREE.MeshBasicMaterial({
+        color: isEnemy ? 0xff92cb : 0x96faff,
+        toneMapped: false,
+      }),
+    );
+    tracer.scale.z = 1.8;
+    bulletMesh.add(tracer);
+  }
   scene.add(bulletMesh);
   const flightDistance = Math.hypot(targetPos.x - startPos.x, targetPos.z - startPos.z);
   bullets.push({
@@ -160,15 +344,22 @@ export function fireBullet(
     ownerTankId: tank.id,
     startPos,
     targetPos: targetPos.clone(),
+    damage,
+    isLaser,
     elapsed: 0,
-    duration: THREE.MathUtils.clamp(flightDistance / tank.type.projectileSpeed, 0.3, 2.8),
+    duration: THREE.MathUtils.clamp(flightDistance / (isLaser ? 150 : 90), 0.08, 0.75),
     isEnemy,
   });
 }
 
 export function createExplosion(position: THREE.Vector3, scene: THREE.Scene) {
-  const mat = new THREE.MeshBasicMaterial({ color: 0xff5500, transparent: true, opacity: 1 });
-  const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 0), mat);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x6deaff,
+    transparent: true,
+    opacity: 1,
+    blending: THREE.AdditiveBlending,
+  });
+  const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.7, 1), mat);
   mesh.position.copy(position);
   scene.add(mesh);
   explosions.push({ mesh, life: 0.8 });
@@ -185,6 +376,13 @@ function lerpAngle(current: number, target: number, speed: number) {
   return current + diff * speed;
 }
 
+export interface FlightControls {
+  throttle: number;
+  turn: number;
+  strafe: number;
+  boost: number;
+}
+
 export function updateTank(
   tank: TankData,
   allTanks: TankData[],
@@ -193,6 +391,7 @@ export function updateTank(
   movementDirection?: THREE.Vector3,
   movementMultiplier = 1,
   directMovement = false,
+  flightControls?: FlightControls,
 ) {
   const distance = tank.group.position.distanceTo(tank.targetPos);
   
@@ -209,16 +408,33 @@ export function updateTank(
 
   if (nearestEnemy) {
     const turretAngle = getAngle(tank.group.position, nearestEnemy.group.position) - tank.group.rotation.y;
-    tank.turretGroup.rotation.y = lerpAngle(
-      tank.turretGroup.rotation.y,
-      turretAngle,
-      tank.type.turretRotationSpeed * delta,
-    );
-  } else {
+    if (tank.isEnemy) {
+      tank.turretGroup.rotation.y = lerpAngle(
+        tank.turretGroup.rotation.y,
+        turretAngle,
+        tank.type.turretRotationSpeed * delta,
+      );
+    }
+  } else if (tank.isEnemy) {
     tank.turretGroup.rotation.y = lerpAngle(tank.turretGroup.rotation.y, 0, 4 * delta);
   }
 
-  if (movementDirection !== undefined) {
+  if (flightControls) {
+    tank.group.rotation.y += flightControls.turn * tank.type.rotationSpeed * delta;
+    const yaw = tank.group.rotation.y;
+    const forwardX = -Math.sin(yaw);
+    const forwardZ = -Math.cos(yaw);
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
+    const speed = tank.type.playerSpeed * flightControls.boost;
+    tank.group.position.x += (
+      forwardX * flightControls.throttle + rightX * flightControls.strafe
+    ) * speed * delta;
+    tank.group.position.z += (
+      forwardZ * flightControls.throttle + rightZ * flightControls.strafe
+    ) * speed * delta;
+    tank.targetPos.copy(tank.group.position);
+  } else if (movementDirection !== undefined) {
     if (movementDirection.lengthSq() > 0) {
       const targetAngle = getAngle(tank.group.position, tank.group.position.clone().add(movementDirection));
       tank.group.rotation.y = lerpAngle(
@@ -232,11 +448,9 @@ export function updateTank(
       while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
 
       if (directMovement || Math.abs(angleDiff) < 0.8) {
-        moveTank(
-          tank.group.position,
+        tank.group.position.addScaledVector(
           movementDirection,
           tank.type.playerSpeed * movementMultiplier * delta,
-          tank.type.collisionRadius,
         );
       }
     }
@@ -255,15 +469,9 @@ export function updateTank(
 
     if (Math.abs(angleDiff) < 0.8) {
       const direction = new THREE.Vector3().subVectors(tank.targetPos, tank.group.position).setY(0).normalize();
-      const frontPos = tank.group.position.clone().add(direction.clone().multiplyScalar(2));
-      const slope = getGroundHeight(frontPos.x, frontPos.z, ground) - tank.group.position.y;
-
       let speed = tank.type.aiSpeed;
-      if (slope > 0.2) speed = 2;
-      else if (slope < -0.2) speed = 7;
       if (distance < 4) speed *= 0.5;
-
-      moveTank(tank.group.position, direction, speed * delta, tank.type.collisionRadius);
+      tank.group.position.addScaledVector(direction, speed * delta);
     }
   } else if (distance > 0.1) {
     tank.targetPos.copy(tank.group.position);
@@ -275,15 +483,11 @@ export function updateTank(
   tank.targetPos.z = THREE.MathUtils.clamp(tank.targetPos.z, -TANK_BOUNDARY, TANK_BOUNDARY);
 
   const currentGroundY = getGroundHeight(tank.group.position.x, tank.group.position.z, ground);
-  tank.group.position.y = THREE.MathUtils.lerp(tank.group.position.y, currentGroundY, 10 * delta);
-
-  const forward = new THREE.Vector3(0, 0, -2).applyEuler(tank.group.rotation);
-  const right = new THREE.Vector3(2, 0, 0).applyEuler(tank.group.rotation);
-  const hForward = getGroundHeight(tank.group.position.x + forward.x, tank.group.position.z + forward.z, ground);
-  const hRight = getGroundHeight(tank.group.position.x + right.x, tank.group.position.z + right.z, ground);
-
-  const pitch = Math.atan2(hForward - currentGroundY, 2); 
-  const roll = Math.atan2(hRight - currentGroundY, 2);
-  tank.group.rotation.x = THREE.MathUtils.lerp(tank.group.rotation.x, -pitch, 10 * delta);
-  tank.group.rotation.z = THREE.MathUtils.lerp(tank.group.rotation.z, roll, 10 * delta);
+  tank.flightPhase += delta;
+  tank.group.position.y = currentGroundY + 7 + Math.sin(tank.flightPhase * 2.2) * 0.16;
+  tank.group.rotation.x = Math.sin(tank.flightPhase * 1.1) * 0.025;
+  tank.group.rotation.z = Math.sin(tank.flightPhase * 1.7) * 0.035;
+  for (let index = 0; index < tank.rotors.length; index++) {
+    tank.rotors[index].rotation.y += delta * (index % 2 === 0 ? 38 : -38);
+  }
 }

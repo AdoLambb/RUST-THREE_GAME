@@ -4,6 +4,7 @@ import {
   createExplosion,
   createTank,
   enemyTanks,
+  explosions,
   fireBullet,
   playerTanks,
   updateTank,
@@ -21,75 +22,53 @@ const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('Missing #app root element');
 
 app.innerHTML = `
-  <div class="hud">
-    <div class="brand"><span class="brand-mark">◆</span><div><strong>赛博红警</strong><small>边境冲突 · 实时战略</small></div></div>
-    <div class="status"><span class="live-dot"></span><span id="status">战场已部署</span></div>
-    <div class="resources"><span>能源</span><strong id="credits">1200</strong><span class="resource-icon">⬡</span></div>
-  </div>
-  <div class="left-panel">
-    <div class="panel-heading">战场简报 <span>FIELD INTEL</span></div>
-    <div class="stat-row"><span>我方战车</span><strong id="army-count">0</strong></div>
-    <div class="stat-row"><span>敌方战车</span><strong id="enemy-count">0</strong></div>
-    <div class="stat-row"><span>已摧毁障碍</span><strong id="obstacle-count">0</strong></div>
-    <div class="selected-info" id="selected-info">左键选择战车，右键下达移动 / 攻击指令</div>
-  </div>
-  <div class="bottom-panel">
-    <div class="orders">
-      <button data-unit="light"><kbd>1</kbd><span class="unit-icon light-icon">▰</span><span><b>轻型坦克</b><small>快速 · 造价 300</small></span></button>
-      <button data-unit="medium"><kbd>2</kbd><span class="unit-icon medium-icon">▰</span><span><b>中型坦克</b><small>均衡 · 造价 450</small></span></button>
-      <button data-unit="heavy"><kbd>3</kbd><span class="unit-icon heavy-icon">▰</span><span><b>重型坦克</b><small>重装 · 造价 650</small></span></button>
-    </div>
-    <div class="controls">拖动框选 · 右键移动 / 攻击 · 滚轮缩放 · WASD 移动镜头</div>
-  </div>
-  <div class="selection-box" id="selection-box"></div>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">⬡</span><div><strong>钢铁前线</strong><small>ARMORED FRONTIER</small></div></div>
+    <div class="battle-status"><i></i><span id="battle-status">战斗进行中</span></div>
+    <div class="top-actions"><span class="team-label"><i></i>蓝方</span><button id="settings-button" aria-expanded="false">⚙ 设置</button></div>
+  </header>
+  <section class="battle-hud">
+    <div class="tank-card"><div class="card-title"><span>我方战车</span><b id="player-type">中型坦克</b></div><div class="health-track"><i id="player-health"></i></div><div class="health-copy" id="player-health-copy">装甲 4 / 4</div></div>
+    <div class="battle-readout"><span>敌方战车</span><b id="enemy-health-copy">装甲 4 / 4</b><div class="health-track enemy-track"><i id="enemy-health"></i></div></div>
+  </section>
+  <section class="settings-panel" id="settings-panel" hidden>
+    <div class="settings-title">战场设置 <button id="close-settings" aria-label="关闭设置">×</button></div>
+    <label class="setting-row"><span>镜头模式</span><select id="camera-mode"><option value="follow">跟随战车</option><option value="fixed">固定视角</option></select></label>
+    <label class="setting-row"><span>坦克类型</span><select id="tank-type"><option value="light">轻型坦克</option><option value="medium">中型坦克</option><option value="heavy">重型坦克</option></select></label>
+    <p class="settings-hint">镜头默认跟随战车。使用 WASD 驾驶，鼠标瞄准并开火。</p>
+    <button class="reset-button" id="reset-game">重开战斗</button>
+  </section>
+  <div class="crosshair" id="crosshair"></div>
   <div class="toast" id="toast"></div>
+  <footer class="controls"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 驾驶</span><span><kbd>鼠标</kbd> 炮塔瞄准</span><span><kbd>左键</kbd> 开火</span><span><kbd>空格</kbd> 加速</span><span><kbd>右键</kbd> 移动至目标</span></footer>
 `;
 
 const style = document.createElement('style');
 style.textContent = `
   * { box-sizing: border-box; }
-  html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#08111a; color:#e4f2ff; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#101914; color:#eaf0e5; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
   #app { position:fixed; inset:0; }
   canvas { display:block; width:100%; height:100%; }
-  .hud { position:absolute; z-index:2; inset:0 0 auto; height:78px; display:flex; align-items:center; gap:32px; padding:0 28px; background:linear-gradient(180deg,rgba(5,13,21,.96),rgba(5,13,21,.72)); border-bottom:1px solid #234158; }
-  .brand { display:flex; align-items:center; gap:12px; min-width:235px; }
-  .brand-mark { color:#4edbff; font-size:31px; text-shadow:0 0 14px #36cfff; }
-  .brand strong { display:block; font-size:23px; letter-spacing:3px; color:#effaff; }
-  .brand small { display:block; color:#65869a; font-size:11px; letter-spacing:2px; }
-  .status { color:#8bb2c5; font-size:14px; letter-spacing:1px; }
-  .live-dot { display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:#45e5ad; box-shadow:0 0 10px #45e5ad; }
-  .resources { margin-left:auto; display:flex; align-items:center; gap:10px; color:#80a0b5; font-size:13px; letter-spacing:2px; }
-  .resources strong { color:#ffe28b; font-size:25px; letter-spacing:1px; }
-  .resource-icon { color:#4edbff; font-size:22px; }
-  .left-panel { position:absolute; z-index:2; top:100px; left:22px; width:245px; padding:16px; background:rgba(7,17,26,.83); border:1px solid #28506a; border-left:2px solid #42cfee; box-shadow:0 10px 30px #0005; }
-  .panel-heading { display:flex; justify-content:space-between; padding-bottom:11px; margin-bottom:8px; border-bottom:1px solid #20394b; color:#d9f4ff; font-weight:700; letter-spacing:2px; }
-  .panel-heading span { color:#4d778c; font-size:10px; letter-spacing:1px; }
-  .stat-row { display:flex; justify-content:space-between; padding:6px 0; color:#89a5b4; font-size:14px; }
-  .stat-row strong { color:#d8effa; font-size:17px; }
-  .selected-info { min-height:46px; padding:10px 0 0; margin-top:8px; border-top:1px solid #20394b; color:#6f94a7; font-size:12px; line-height:1.55; }
-  .bottom-panel { position:absolute; z-index:2; left:50%; bottom:20px; width:min(680px,calc(100% - 32px)); transform:translateX(-50%); padding:10px 12px 8px; background:rgba(6,16,25,.91); border:1px solid #31536a; box-shadow:0 10px 36px #0008; }
-  .orders { display:flex; justify-content:center; gap:8px; }
-  .orders button { display:flex; align-items:center; gap:9px; min-width:190px; padding:9px 11px; color:#d8edf6; text-align:left; cursor:pointer; background:linear-gradient(135deg,#102636,#0b1a27); border:1px solid #29485d; transition:.15s; }
-  .orders button:hover { border-color:#4ad8ff; background:#17364a; transform:translateY(-2px); }
-  .orders kbd { align-self:flex-start; color:#62d8f5; font-size:12px; }
-  .unit-icon { color:#6fdcff; font-size:24px; text-shadow:0 0 10px currentColor; }
-  .medium-icon { color:#ffd56f; } .heavy-icon { color:#ff8a72; }
-  .orders b,.orders small { display:block; } .orders b { font-size:14px; } .orders small { margin-top:3px; color:#7898a9; font-size:11px; }
-  .controls { padding-top:8px; color:#7293a4; text-align:center; font-size:11px; letter-spacing:1px; }
-  .selection-box { position:absolute; z-index:3; display:none; border:1px solid #5be3ff; background:#35cfff1a; pointer-events:none; }
-  .toast { position:absolute; z-index:4; top:94px; left:50%; transform:translateX(-50%); padding:9px 18px; color:#d9f8ff; background:#071722e8; border:1px solid #39748c; opacity:0; transition:opacity .2s; pointer-events:none; }
-  .toast.show { opacity:1; }
-  @media(max-width:700px) { .hud { padding:0 12px; gap:12px; } .brand { min-width:0; } .brand strong { font-size:18px; } .status { display:none; } .left-panel { top:88px; left:10px; width:190px; } .orders button { min-width:0; flex:1; padding:7px 5px; gap:4px; } .orders small { display:none; } .unit-icon { display:none; } .controls { font-size:9px; } }
+  .topbar { position:absolute; z-index:2; inset:0 0 auto; height:68px; padding:0 24px; display:flex; align-items:center; gap:30px; background:linear-gradient(180deg,#101a17f2,#101a17c9); border-bottom:1px solid #82917444; }
+  .brand { display:flex; align-items:center; gap:10px; min-width:220px; }.brand-mark { color:#d8bc6d; font-size:28px; }.brand strong { display:block; font-size:19px; letter-spacing:3px; }.brand small { display:block; margin-top:2px; color:#8b9b83; font-size:9px; letter-spacing:2px; }
+  .battle-status { color:#c6d2ba; font-size:13px; letter-spacing:1px; }.battle-status i { display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:#8fc779; box-shadow:0 0 9px #8fc779; }
+  .top-actions { margin-left:auto; display:flex; align-items:center; gap:18px; }.team-label { color:#8acbff; font-size:13px; }.team-label i { display:inline-block; width:8px; height:8px; margin-right:6px; border-radius:50%; background:#45a9f3; }
+  button, select { font:inherit; }.top-actions button { padding:8px 13px; color:#dce8d4; background:#24352b; border:1px solid #55694e; cursor:pointer; }.top-actions button:hover { background:#304536; }
+  .battle-hud { position:absolute; z-index:2; top:86px; left:20px; display:flex; gap:10px; }.tank-card,.battle-readout { width:216px; padding:12px 14px; background:#101a17df; border:1px solid #70805c66; box-shadow:0 8px 22px #0005; }.card-title { display:flex; justify-content:space-between; color:#c9d3c0; font-size:12px; }.card-title b { color:#f0d47c; }.health-track { height:7px; margin-top:9px; overflow:hidden; background:#3b2422; border-radius:5px; }.health-track i { display:block; width:100%; height:100%; background:linear-gradient(90deg,#64b85e,#b8db66); transition:width .15s; }.enemy-track i { background:linear-gradient(90deg,#bb5145,#f09565); }.health-copy { margin-top:5px; color:#9aaa8f; font-size:11px; }.battle-readout { width:190px; color:#d7c8bf; font-size:12px; }.battle-readout b { float:right; color:#f0a18a; font-weight:500; }
+  .settings-panel { position:absolute; z-index:5; top:78px; right:20px; width:280px; padding:15px; background:#111b18f5; border:1px solid #738264; box-shadow:0 12px 36px #0009; }.settings-panel[hidden] { display:none; }.settings-title { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; color:#f2d98a; font-weight:700; letter-spacing:1px; }.settings-title button { color:#b9c7b1; background:none; border:0; font-size:22px; cursor:pointer; }.setting-row { display:flex; align-items:center; justify-content:space-between; margin:9px 0; color:#c4d0bd; font-size:13px; }.setting-row select { min-width:125px; padding:6px; color:#e2ebda; background:#202f27; border:1px solid #53664b; }.settings-hint { color:#8b9d86; font-size:11px; line-height:1.6; }.reset-button { width:100%; margin-top:10px; padding:9px; color:#f2d9be; background:#583a30; border:1px solid #a3674e; cursor:pointer; }.reset-button:hover { background:#754638; }
+  .crosshair { position:absolute; z-index:2; width:22px; height:22px; border:1px solid #ffe37d; border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; opacity:.9; }.crosshair:before,.crosshair:after { content:""; position:absolute; background:#ffe37d; }.crosshair:before { left:9px; top:-5px; width:1px; height:30px; }.crosshair:after { top:9px; left:-5px; width:30px; height:1px; }
+  .toast { position:absolute; z-index:3; top:166px; left:50%; padding:9px 16px; color:#fff0c6; background:#172018e8; border:1px solid #958454; transform:translate(-50%,-6px); opacity:0; transition:.2s; pointer-events:none; }.toast.show { opacity:1; transform:translate(-50%,0); }
+  .controls { position:absolute; z-index:2; left:50%; bottom:17px; display:flex; gap:15px; padding:9px 14px; color:#d2d9c9; background:#101914dd; border:1px solid #71806466; transform:translateX(-50%); white-space:nowrap; font-size:11px; }.controls span { display:flex; align-items:center; gap:4px; }.controls kbd { padding:2px 5px; color:#e7d797; background:#354236; border:1px solid #728067; border-radius:3px; font:inherit; }
+  @media(max-width:700px) { .topbar { height:58px; padding:0 12px; }.brand { min-width:0; }.brand strong { font-size:16px; }.battle-status { display:none; }.battle-hud { top:70px; left:8px; gap:6px; }.tank-card,.battle-readout { width:155px; padding:9px; }.battle-readout { width:145px; }.controls { max-width:calc(100% - 16px); bottom:8px; gap:7px; flex-wrap:wrap; justify-content:center; white-space:normal; font-size:9px; }.settings-panel { top:64px; right:8px; } }
 `;
 document.head.appendChild(style);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x07111a);
-scene.fog = new THREE.Fog(0x07111a, 95, 175);
+scene.background = new THREE.Color(0x1b2c26);
+scene.fog = new THREE.Fog(0x1b2c26, 80, 165);
 
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 250);
-camera.position.set(0, 105, 65);
-camera.lookAt(0, 0, 0);
+const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 250);
+camera.up.set(0, 1, 0);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
@@ -97,70 +76,51 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.prepend(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0x9ecfff, 0x1b3328, 2));
-const sun = new THREE.DirectionalLight(0xd4eeff, 2.4);
-sun.position.set(-35, 60, 20);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xc6d9be, 0x394437, 1.8));
+const sunlight = new THREE.DirectionalLight(0xffe7c2, 2);
+sunlight.position.set(-35, 60, 20);
+sunlight.castShadow = true;
+sunlight.shadow.mapSize.set(2048, 2048);
+scene.add(sunlight);
 
 const ground = buildTerrain(scene);
-const grid = new THREE.GridHelper(120, 30, 0x45b6d3, 0x274653);
-grid.position.y = 0.08;
+const grid = new THREE.GridHelper(120, 30, 0x9cad78, 0x647255);
+grid.position.y = 0.06;
 (grid.material as THREE.Material).transparent = true;
-(grid.material as THREE.Material).opacity = 0.18;
+(grid.material as THREE.Material).opacity = 0.17;
 scene.add(grid);
 
-function makeBase(team: 'blue' | 'red', z: number) {
-  const group = new THREE.Group();
-  const color = team === 'blue' ? 0x19b9e8 : 0xea514f;
-  const base = new THREE.Mesh(
-    new THREE.CylinderGeometry(7, 8, 2.2, 8),
-    new THREE.MeshStandardMaterial({ color: team === 'blue' ? 0x164e70 : 0x632a32, metalness: 0.6, roughness: 0.35 }),
-  );
-  base.position.y = 1;
-  base.castShadow = true;
-  group.add(base);
-  const core = new THREE.Mesh(
-    new THREE.OctahedronGeometry(3.2),
-    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, metalness: 0.3, roughness: 0.2 }),
-  );
-  core.position.y = 5;
-  core.castShadow = true;
-  group.add(core);
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(5, 0.18, 8, 32),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.72 }),
-  );
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.3;
-  group.add(ring);
-  group.position.set(0, 0, z);
-  scene.add(group);
-}
-makeBase('blue', 48);
-makeBase('red', -48);
-
-const selected = new Set<TankData>();
-const selectionMarkers = new Map<TankData, THREE.Mesh>();
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
-const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-const selectionBox = document.querySelector<HTMLDivElement>('#selection-box')!;
-const status = document.querySelector<HTMLSpanElement>('#status')!;
-const creditsLabel = document.querySelector<HTMLElement>('#credits')!;
+const playerTypeSelect = document.querySelector<HTMLSelectElement>('#tank-type')!;
+const cameraModeSelect = document.querySelector<HTMLSelectElement>('#camera-mode')!;
+const settingsPanel = document.querySelector<HTMLElement>('#settings-panel')!;
+const settingsButton = document.querySelector<HTMLButtonElement>('#settings-button')!;
+const playerHealthBar = document.querySelector<HTMLElement>('#player-health')!;
+const playerHealthCopy = document.querySelector<HTMLElement>('#player-health-copy')!;
+const enemyHealthBar = document.querySelector<HTMLElement>('#enemy-health')!;
+const enemyHealthCopy = document.querySelector<HTMLElement>('#enemy-health-copy')!;
+const playerTypeLabel = document.querySelector<HTMLElement>('#player-type')!;
+const battleStatus = document.querySelector<HTMLElement>('#battle-status')!;
 const toast = document.querySelector<HTMLDivElement>('#toast')!;
-const info = document.querySelector<HTMLDivElement>('#selected-info')!;
-let credits = 1200;
+const crosshair = document.querySelector<HTMLDivElement>('#crosshair')!;
+
+const cameraPreference = localStorage.getItem('tank-camera-mode');
+cameraModeSelect.value = cameraPreference === 'fixed' ? 'fixed' : 'follow';
+
+let player: TankData;
+let enemy: TankData;
+let isGameOver = false;
 let toastTimer = 0;
-let enemyWaveTimer = 18;
-let destroyedObstacles = 0;
-let gameEnded = false;
-let dragStart: { x: number; y: number } | null = null;
-let dragMoved = false;
-let cameraTarget = new THREE.Vector3();
+let fireCooldown = 0;
+let aiFireCooldown = 0;
+let moveTarget: THREE.Vector3 | null = null;
 const heldKeys = new Set<string>();
 const clock = new THREE.Timer();
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const aimPoint = new THREE.Vector3();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const cameraTarget = new THREE.Vector3();
+const cameraOffset = new THREE.Vector3(0, 58, 36);
 
 function showToast(message: string) {
   toast.textContent = message;
@@ -168,265 +128,161 @@ function showToast(message: string) {
   toastTimer = 2.2;
 }
 
-function updatePointer(event: PointerEvent) {
+function makeMatch(typeId: TankTypeId) {
+  for (const tank of [...playerTanks, ...enemyTanks]) scene.remove(tank.group);
+  playerTanks.splice(0);
+  enemyTanks.splice(0);
+  for (const bullet of bullets.splice(0)) {
+    scene.remove(bullet.mesh);
+    bullet.mesh.geometry.dispose();
+    (bullet.mesh.material as THREE.Material).dispose();
+  }
+  for (const explosion of explosions.splice(0)) {
+    scene.remove(explosion.mesh);
+    explosion.mesh.geometry.dispose();
+    (explosion.mesh.material as THREE.Material).dispose();
+  }
+
+  createTank(false, 0, 24, scene, ground, typeId);
+  player = playerTanks[playerTanks.length - 1];
+  createTank(true, 0, -24, scene, ground, 'medium');
+  enemy = enemyTanks[enemyTanks.length - 1];
+  enemy.targetPos.copy(player.group.position);
+  isGameOver = false;
+  moveTarget = null;
+  battleStatus.textContent = '战斗进行中';
+  playerTypeLabel.textContent = player.type.name;
+  updateHealthUI();
+  cameraTarget.copy(player.group.position);
+}
+
+function updateHealthUI() {
+  const playerRatio = THREE.MathUtils.clamp(player.hp / player.type.maxHp, 0, 1);
+  const enemyRatio = THREE.MathUtils.clamp(enemy.hp / enemy.type.maxHp, 0, 1);
+  playerHealthBar.style.width = `${playerRatio * 100}%`;
+  playerHealthCopy.textContent = `装甲 ${Math.max(0, player.hp)} / ${player.type.maxHp}`;
+  enemyHealthBar.style.width = `${enemyRatio * 100}%`;
+  enemyHealthCopy.textContent = `装甲 ${Math.max(0, enemy.hp)} / ${enemy.type.maxHp}`;
+}
+
+makeMatch('medium');
+
+function updateAim(event: PointerEvent) {
   const bounds = renderer.domElement.getBoundingClientRect();
   pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
   pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
+  return raycaster.ray.intersectPlane(groundPlane, aimPoint) ? aimPoint.clone() : null;
 }
 
-function groundPosition(event: PointerEvent) {
-  updatePointer(event);
-  const point = new THREE.Vector3();
-  return raycaster.ray.intersectPlane(groundPlane, point) ? point : null;
+function aimTurret(tank: TankData, target: THREE.Vector3) {
+  const angle = Math.atan2(target.x - tank.group.position.x, target.z - tank.group.position.z) + Math.PI;
+  tank.turretGroup.rotation.y = angle - tank.group.rotation.y;
 }
 
-function tankAtPointer(event: PointerEvent) {
-  updatePointer(event);
-  const all = [...playerTanks, ...enemyTanks].filter(tank => tank.hp > 0);
-  const intersections = raycaster.intersectObjects(all.map(tank => tank.group), true);
-  const id = intersections[0]?.object.userData.tankId;
-  return all.find(tank => tank.id === id) ?? null;
-}
+renderer.domElement.addEventListener('pointermove', event => {
+  const point = updateAim(event);
+  crosshair.style.left = `${event.clientX}px`;
+  crosshair.style.top = `${event.clientY}px`;
+  if (point && player && player.hp > 0) aimTurret(player, point);
+});
 
-function addSelectionMarker(tank: TankData) {
-  let marker = selectionMarkers.get(tank);
-  if (!marker) {
-    marker = new THREE.Mesh(
-      new THREE.RingGeometry(1.4, 1.58, 32),
-      new THREE.MeshBasicMaterial({ color: 0x4de4ff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }),
-    );
-    marker.rotation.x = -Math.PI / 2;
-    marker.position.y = 0.12;
-    tank.group.add(marker);
-    selectionMarkers.set(tank, marker);
-  }
-  marker.visible = selected.has(tank);
-}
-
-function updateSelectionDisplay() {
-  for (const tank of playerTanks) {
-    tank.isSelected = selected.has(tank);
-    addSelectionMarker(tank);
-  }
-  if (!selected.size) {
-    info.textContent = '左键选择战车，右键下达移动 / 攻击指令';
-    return;
-  }
-  const hp = [...selected].reduce((sum, tank) => sum + tank.hp, 0);
-  info.textContent = `已选中 ${selected.size} 辆战车 · 当前总耐久 ${hp}`;
-}
-
-function selectOnly(tank: TankData | null) {
-  selected.clear();
-  if (tank && !tank.isEnemy && tank.hp > 0) selected.add(tank);
-  updateSelectionDisplay();
-}
-
-function spawnTank(type: TankTypeId, enemy = false, x?: number, z?: number) {
-  const spawnX = x ?? (Math.random() - 0.5) * 12;
-  const spawnZ = z ?? (enemy ? -39 : 39);
-  createTank(enemy, spawnX, spawnZ, scene, ground, type);
-  const tanks = enemy ? enemyTanks : playerTanks;
-  const tank = tanks[tanks.length - 1];
-  tank.group.traverse(object => { object.userData.tankId = tank.id; });
-  return tank;
-}
-
-function makeInitialForces() {
-  spawnTank('medium', false, -4, 36);
-  spawnTank('light', false, 0, 39);
-  spawnTank('light', false, 4, 42);
-  spawnTank('medium', true, -3, -37);
-  spawnTank('light', true, 3, -40);
-  for (const enemy of enemyTanks) enemy.targetPos.set(0, 0, 0);
-}
-makeInitialForces();
-
-for (const tank of playerTanks) {
-  const marker = new THREE.Mesh(
-    new THREE.RingGeometry(1.4, 1.58, 32),
-    new THREE.MeshBasicMaterial({ color: 0x4de4ff, side: THREE.DoubleSide, transparent: true }),
-  );
-  marker.rotation.x = -Math.PI / 2;
-  marker.position.y = 0.12;
-  marker.visible = false;
-  tank.group.add(marker);
-  selectionMarkers.set(tank, marker);
-}
-
-function setOrder(event: PointerEvent) {
-  if (!selected.size) return;
-  const updatePoint = (point: THREE.Vector3) => {
-    for (const tank of selected) tank.targetPos.copy(point);
-  };
-  const all = [...playerTanks, ...enemyTanks].filter(tank => tank.hp > 0);
-  updatePointer(event);
-  const intersections = raycaster.intersectObjects(all.map(tank => tank.group), true);
-  const id = intersections[0]?.object.userData.tankId;
-  const target = all.find(tank => tank.id === id);
-  const point = groundPosition(event);
-  if (!point) return;
-  updatePoint(target?.isEnemy ? target.group.position : point);
-  showToast(target?.isEnemy ? '攻击指令已下达' : '移动指令已下达');
+function fireAt(point: THREE.Vector3) {
+  if (isGameOver || player.hp <= 0 || fireCooldown > 0) return;
+  aimTurret(player, point);
+  fireBullet(player, point, false, scene);
+  fireCooldown = 0.38;
 }
 
 renderer.domElement.addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
-  dragStart = { x: event.clientX, y: event.clientY };
-  dragMoved = false;
-  renderer.domElement.setPointerCapture(event.pointerId);
-});
-
-renderer.domElement.addEventListener('pointermove', event => {
-  if (!dragStart) return;
-  const left = Math.min(dragStart.x, event.clientX);
-  const top = Math.min(dragStart.y, event.clientY);
-  const width = Math.abs(event.clientX - dragStart.x);
-  const height = Math.abs(event.clientY - dragStart.y);
-  dragMoved ||= width + height > 8;
-  if (!dragMoved) return;
-  selectionBox.style.display = 'block';
-  selectionBox.style.left = `${left}px`;
-  selectionBox.style.top = `${top}px`;
-  selectionBox.style.width = `${width}px`;
-  selectionBox.style.height = `${height}px`;
-});
-
-renderer.domElement.addEventListener('pointerup', event => {
-  if (!dragStart) return;
-  if (dragMoved) {
-    const left = Math.min(dragStart.x, event.clientX);
-    const right = Math.max(dragStart.x, event.clientX);
-    const top = Math.min(dragStart.y, event.clientY);
-    const bottom = Math.max(dragStart.y, event.clientY);
-    selected.clear();
-    for (const tank of playerTanks) {
-      if (tank.hp <= 0) continue;
-      const projected = tank.group.position.clone().project(camera);
-      const x = (projected.x + 1) * window.innerWidth / 2;
-      const y = (1 - projected.y) * window.innerHeight / 2;
-      if (x >= left && x <= right && y >= top && y <= bottom) selected.add(tank);
-    }
-    updateSelectionDisplay();
-  } else {
-    selectOnly(tankAtPointer(event));
-  }
-  selectionBox.style.display = 'none';
-  dragStart = null;
+  const point = updateAim(event);
+  if (point) fireAt(point);
 });
 
 renderer.domElement.addEventListener('contextmenu', event => {
   event.preventDefault();
-  setOrder(event);
+  const point = updateAim(event);
+  if (point) moveTarget = point;
 });
 
-function recruit(type: TankTypeId) {
-  if (gameEnded) return;
-  const cost = type === 'light' ? 300 : type === 'medium' ? 450 : 650;
-  if (credits < cost) {
-    showToast('能源不足，无法生产');
-    return;
-  }
-  credits -= cost;
-  creditsLabel.textContent = String(credits);
-  const offset = (playerTanks.length % 5 - 2) * 3;
-  const tank = spawnTank(type, false, offset, 40 + Math.floor(playerTanks.length / 5) * 3);
-  selected.clear();
-  selected.add(tank);
-  updateSelectionDisplay();
-  showToast(`${tank.type.name} 已部署`);
-}
-
-document.querySelectorAll<HTMLButtonElement>('[data-unit]').forEach(button => {
-  button.addEventListener('click', () => recruit(button.dataset.unit as TankTypeId));
-});
 window.addEventListener('keydown', event => {
   const key = event.key.toLowerCase();
-  if (['w', 'a', 's', 'd', '1', '2', '3'].includes(key)) event.preventDefault();
+  if (['w', 'a', 's', 'd', ' '].includes(key)) event.preventDefault();
   heldKeys.add(key);
-  if (event.repeat) return;
-  if (key === '1') recruit('light');
-  if (key === '2') recruit('medium');
-  if (key === '3') recruit('heavy');
 });
 window.addEventListener('keyup', event => heldKeys.delete(event.key.toLowerCase()));
 
-renderer.domElement.addEventListener('wheel', event => {
-  event.preventDefault();
-  const direction = camera.position.clone().sub(cameraTarget).normalize();
-  const distance = THREE.MathUtils.clamp(camera.position.distanceTo(cameraTarget) + event.deltaY * 0.045, 45, 135);
-  camera.position.copy(cameraTarget).add(direction.multiplyScalar(distance));
-}, { passive: false });
+settingsButton.addEventListener('click', () => {
+  settingsPanel.hidden = !settingsPanel.hidden;
+  settingsButton.setAttribute('aria-expanded', String(!settingsPanel.hidden));
+});
+document.querySelector('#close-settings')!.addEventListener('click', () => {
+  settingsPanel.hidden = true;
+  settingsButton.setAttribute('aria-expanded', 'false');
+});
+cameraModeSelect.addEventListener('change', () => {
+  localStorage.setItem('tank-camera-mode', cameraModeSelect.value);
+});
+playerTypeSelect.addEventListener('change', () => {
+  makeMatch(playerTypeSelect.value as TankTypeId);
+});
+document.querySelector('#reset-game')!.addEventListener('click', () => {
+  makeMatch(playerTypeSelect.value as TankTypeId);
+  settingsPanel.hidden = true;
+  settingsButton.setAttribute('aria-expanded', 'false');
+  showToast('战斗已重置');
+});
 
-function nearestLivingEnemy(tank: TankData) {
-  const enemies = tank.isEnemy ? playerTanks : enemyTanks;
-  let nearest: TankData | null = null;
-  let distance = 78;
-  for (const other of enemies) {
-    if (other.hp <= 0) continue;
-    const current = tank.group.position.distanceTo(other.group.position);
-    if (current < distance) {
-      distance = current;
-      nearest = other;
+function applyDamage(tank: TankData, damage: number) {
+  if (tank.hp <= 0) return;
+  tank.hp = Math.max(0, tank.hp - damage);
+  if (tank.hp === 0) {
+    tank.group.visible = false;
+    if (tank === player) {
+      isGameOver = true;
+      battleStatus.textContent = '战车已被摧毁';
+      showToast('任务失败 · 点击设置重开战斗');
+    } else {
+      isGameOver = true;
+      battleStatus.textContent = '战斗胜利';
+      showToast('任务完成 · 敌方战车已摧毁');
     }
   }
-  return nearest;
-}
-
-function fireIfReady(tank: TankData, delta: number) {
-  tank.fireCooldown = Math.max(0, tank.fireCooldown - delta);
-  const target = nearestLivingEnemy(tank);
-  if (!target || tank.fireCooldown > 0) return;
-  if (tank.group.position.distanceTo(target.group.position) > 58) return;
-  fireBullet(tank, target.group.position, tank.isEnemy, scene);
-  tank.fireCooldown = tank.isEnemy ? 1.45 : 1.05;
+  updateHealthUI();
 }
 
 function updateProjectiles(delta: number) {
   for (let index = bullets.length - 1; index >= 0; index--) {
     const bullet = bullets[index];
+    const previous = bullet.mesh.position.clone();
     bullet.elapsed += delta;
     const progress = THREE.MathUtils.clamp(bullet.elapsed / bullet.duration, 0, 1);
     bullet.mesh.position.copy(bullet.startPos).lerp(bullet.targetPos, progress);
-    bullet.mesh.position.y += Math.sin(progress * Math.PI) * 4.5;
-    const obstacleHit = findObstacleHit(bullet.startPos, bullet.mesh.position);
+    bullet.mesh.position.y += Math.sin(progress * Math.PI) * 3;
+
+    const obstacleHit = findObstacleHit(previous, bullet.mesh.position);
     if (obstacleHit) {
-      damageObstacle(obstacleHit.obstacle, 1);
+      damageObstacle(obstacleHit.obstacle, obstacleHit.obstacle.type === 'house' ? 1 : 1);
       if (obstacleHit.obstacle.destroyed) {
         const obstacleIndex = terrainObstacles.indexOf(obstacleHit.obstacle);
         if (obstacleIndex >= 0) terrainObstacles.splice(obstacleIndex, 1);
       }
       createExplosion(obstacleHit.point, scene);
       scene.remove(bullet.mesh);
-      bullet.mesh.geometry.dispose();
-      (bullet.mesh.material as THREE.Material).dispose();
       bullets.splice(index, 1);
       continue;
     }
     if (progress < 1) continue;
 
-    const targets = bullet.isEnemy ? playerTanks : enemyTanks;
-    const impact = bullet.targetPos;
-    let hit: TankData | null = null;
-    let hitDistance = 3.6;
+    const impact = bullet.mesh.position.clone();
+    const targets = bullet.isEnemy ? [player] : [enemy];
     for (const target of targets) {
-      if (target.hp <= 0) continue;
-      const distance = Math.hypot(target.group.position.x - impact.x, target.group.position.z - impact.z);
-      if (distance < hitDistance) {
-        hit = target;
-        hitDistance = distance;
-      }
+      if (target.hp <= 0 || Math.hypot(target.group.position.x - impact.x, target.group.position.z - impact.z) > 5) continue;
+      const blocked = findObstacleHit(impact, target.group.position);
+      if (!blocked) applyDamage(target, 1);
     }
-    if (hit) {
-      hit.hp = Math.max(0, hit.hp - 1);
-      if (hit.hp <= 0) {
-        hit.group.visible = false;
-        selected.delete(hit);
-        updateSelectionDisplay();
-      }
-    }
-    createExplosion(bullet.mesh.position, scene);
+    createExplosion(impact, scene);
     scene.remove(bullet.mesh);
     bullet.mesh.geometry.dispose();
     (bullet.mesh.material as THREE.Material).dispose();
@@ -434,37 +290,72 @@ function updateProjectiles(delta: number) {
   }
 }
 
+function updateExplosions(delta: number) {
+  for (let index = explosions.length - 1; index >= 0; index--) {
+    const explosion = explosions[index];
+    explosion.life -= delta;
+    const progress = 1 - Math.max(0, explosion.life) / 0.8;
+    explosion.mesh.scale.setScalar(0.4 + progress * 2.4);
+    const material = explosion.mesh.material as THREE.MeshBasicMaterial;
+    material.opacity = Math.max(0, 1 - progress);
+    if (explosion.life > 0) continue;
+    scene.remove(explosion.mesh);
+    explosion.mesh.geometry.dispose();
+    material.dispose();
+    explosions.splice(index, 1);
+  }
+}
+
 function updateCamera(delta: number) {
-  const move = new THREE.Vector3(
-    Number(heldKeys.has('d')) - Number(heldKeys.has('a')),
-    0,
-    Number(heldKeys.has('s')) - Number(heldKeys.has('w')),
-  );
-  if (move.lengthSq()) {
-    move.normalize().multiplyScalar(delta * 38);
-    cameraTarget.add(move);
-    cameraTarget.x = THREE.MathUtils.clamp(cameraTarget.x, -48, 48);
-    cameraTarget.z = THREE.MathUtils.clamp(cameraTarget.z, -52, 52);
-    camera.position.add(move);
+  if (cameraModeSelect.value === 'follow') {
+    cameraTarget.lerp(player.group.position, Math.min(1, delta * 4));
+    camera.position.lerp(cameraTarget.clone().add(cameraOffset), Math.min(1, delta * 3));
   }
   camera.lookAt(cameraTarget);
 }
 
-function updateHUD() {
-  document.querySelector('#army-count')!.textContent = String(playerTanks.filter(tank => tank.hp > 0).length);
-  document.querySelector('#enemy-count')!.textContent = String(enemyTanks.filter(tank => tank.hp > 0).length);
-  const destroyed = terrainObstacles.filter(obstacle => obstacle.destroyed).length;
-  destroyedObstacles = destroyed;
-  document.querySelector('#obstacle-count')!.textContent = String(destroyedObstacles);
-  const remainingEnemy = enemyTanks.filter(tank => tank.hp > 0).length;
-  if (!remainingEnemy && !gameEnded) {
-    gameEnded = true;
-    status.textContent = '敌军已被击退';
-    showToast('战场胜利！敌军已被击退');
-  } else if (!playerTanks.some(tank => tank.hp > 0) && !gameEnded) {
-    gameEnded = true;
-    status.textContent = '我方部队全灭';
-    showToast('战斗失败，所有战车已损失');
+function update(delta: number) {
+  fireCooldown = Math.max(0, fireCooldown - delta);
+  aiFireCooldown = Math.max(0, aiFireCooldown - delta);
+
+  if (!isGameOver && player.hp > 0) {
+    const movement = new THREE.Vector3(
+      Number(heldKeys.has('d')) - Number(heldKeys.has('a')),
+      0,
+      Number(heldKeys.has('s')) - Number(heldKeys.has('w')),
+    );
+    if (movement.lengthSq() > 1) movement.normalize();
+    const movingByKeyboard = movement.lengthSq() > 0;
+    const boost = heldKeys.has(' ');
+    updateTank(
+      player,
+      [player, enemy],
+      delta,
+      ground,
+      movingByKeyboard ? movement : undefined,
+      boost ? 1.8 : 1,
+      true,
+    );
+    if (!movingByKeyboard && moveTarget) {
+      player.targetPos.copy(moveTarget);
+      if (player.group.position.distanceTo(moveTarget) < 2) moveTarget = null;
+    }
+    if (aiFireCooldown <= 0 && player.group.position.distanceTo(enemy.group.position) < 65) {
+      enemy.turretGroup.updateWorldMatrix(true, false);
+      fireBullet(enemy, player.group.position, true, scene);
+      aiFireCooldown = 1.4;
+    }
+  }
+  if (enemy.hp > 0 && !isGameOver) {
+    enemy.targetPos.copy(player.group.position);
+    updateTank(enemy, [player, enemy], delta, ground);
+  }
+  updateProjectiles(delta);
+  updateExplosions(delta);
+  updateCamera(delta);
+  if (toastTimer > 0) {
+    toastTimer -= delta;
+    if (toastTimer <= 0) toast.classList.remove('show');
   }
 }
 
@@ -479,37 +370,7 @@ resize();
 function animate() {
   requestAnimationFrame(animate);
   clock.update();
-  const delta = Math.min(clock.getDelta(), 0.05);
-  updateCamera(delta);
-
-  enemyWaveTimer -= delta;
-  if (enemyWaveTimer <= 0 && !gameEnded) {
-    const alive = enemyTanks.filter(tank => tank.hp > 0).length;
-    if (alive < 8) {
-      const type: TankTypeId = Math.random() > 0.6 ? 'medium' : 'light';
-      const enemy = spawnTank(type, true, (Math.random() - 0.5) * 18, -42);
-      enemy.targetPos.set(0, 0, 0);
-      showToast('侦测到敌方增援');
-    }
-    enemyWaveTimer = 24;
-  }
-
-  const allTanks = [...playerTanks, ...enemyTanks];
-  for (const tank of allTanks) {
-    if (tank.hp <= 0) continue;
-    if (tank.isEnemy && Math.random() < delta * 0.8) {
-      const target = nearestLivingEnemy(tank);
-      if (target) tank.targetPos.copy(target.group.position);
-    }
-    updateTank(tank, allTanks, delta, ground);
-    fireIfReady(tank, delta);
-  }
-  updateProjectiles(delta);
-  if (toastTimer > 0) {
-    toastTimer -= delta;
-    if (toastTimer <= 0) toast.classList.remove('show');
-  }
-  updateHUD();
+  update(Math.min(clock.getDelta(), 0.05));
   renderer.render(scene, camera);
 }
 animate();
