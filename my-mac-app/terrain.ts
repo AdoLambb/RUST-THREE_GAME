@@ -44,7 +44,7 @@ export function buildTerrain(scene: THREE.Scene) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const edge = MAP_HALF_SIZE - 1;  11
+  const edge = MAP_HALF_SIZE - 1;  
   const boundary = new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-edge, 0.65, -edge),
